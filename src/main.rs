@@ -1,10 +1,11 @@
-use std::sync::Mutex;
-use std::{fmt::Debug, sync::Arc};
+use std::cell::RefCell;
+use std::fmt::Debug;
+use std::rc::Rc;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Node<T> {
-    next: Option<Arc<Mutex<Node<T>>>>,
-    prev: Option<Arc<Mutex<Node<T>>>>,
+    next: Option<Rc<RefCell<Node<T>>>>,
+    prev: Option<Rc<RefCell<Node<T>>>>,
     data: T,
 }
 
@@ -19,8 +20,8 @@ impl<T> Node<T> {
 }
 
 struct Deque<T> {
-    begin: Option<Arc<Mutex<Node<T>>>>,
-    end: Option<Arc<Mutex<Node<T>>>>,
+    begin: Option<Rc<RefCell<Node<T>>>>,
+    end: Option<Rc<RefCell<Node<T>>>>,
 }
 
 impl<T> Deque<T>
@@ -35,10 +36,10 @@ where
     }
 
     fn push_front(&mut self, value: T) {
-        let new_node = Arc::new(Mutex::new(Node::new(value)));
+        let new_node = Rc::new(RefCell::new(Node::new(value)));
         match &self.begin {
             Some(node) => {
-                new_node.lock().unwrap().next = Some(node.clone());
+                new_node.borrow_mut().next = Some(node.clone());
                 self.begin = Some(new_node);
             }
             None => {
@@ -50,48 +51,54 @@ where
     }
 
     fn push_back(&mut self, value: T) {
-        let new_node = Arc::new(Mutex::new(Node::new(value)));
+        let new_node = Rc::new(RefCell::new(Node::new(value)));
         match &self.end {
             Some(node) => {
-                new_node.lock().unwrap().prev = Some(node.clone());
-                node.lock().unwrap().next = Some(new_node.clone());
+                new_node.borrow_mut().prev = Some(node.clone());
+                node.borrow_mut().next = Some(new_node.clone());
                 self.end = Some(new_node);
             }
             None => {
                 assert!(self.end.is_none());
                 self.begin = Some(new_node.clone());
-                self.end = Some(new_node);
+                self.end = Some(new_node.into());
             }
         }
     }
 
     fn drop(&mut self, value: T) {
         let mut ptr = self.begin.clone();
-        let mut ptr_prev: Option<Arc<Mutex<Node<T>>>> = None;
-        while let Some(node) = ptr.clone() {
-            if node.lock().unwrap().data == value {
-                if ptr_prev.is_none() {
-                    self.begin = self.begin.clone().unwrap().lock().unwrap().next.clone();
-                } else {
-                    ptr_prev.clone().unwrap().lock().unwrap().next =
-                        node.lock().unwrap().next.clone();
-                    node.lock().unwrap().prev = ptr_prev;
+        let mut ptr_prev: Option<Rc<RefCell<Node<T>>>> = None;
+
+        while let Some(node) = &ptr.clone() {
+            if node.borrow().data == value {
+                match ptr_prev {
+                    Some(node_prev) => {
+                        node_prev.borrow_mut().next = node.borrow().next.clone();
+                        match &node.borrow().next {
+                            Some(node_next) => node_next.borrow_mut().prev = Some(node_prev),
+                            None => {}
+                        }
+                    }
+                    None => self.begin = self.begin.clone().unwrap().borrow().next.clone(),
                 }
                 break;
             }
-            ptr_prev = ptr.clone();
-            ptr = ptr.unwrap().lock().unwrap().next.clone();
+
+            ptr_prev = Some(node.clone());
+            ptr = node.borrow().next.clone();
         }
     }
 }
 
 fn main() {
     let mut xs = Deque::<i32>::new();
+    xs.push_front(1);
+    xs.push_front(2);
     xs.push_back(2);
-    xs.push_back(3);
-    xs.push_back(4);
-    xs.push_back(5);
-    xs.drop(2);
+    xs.push_back(2);
+    xs.push_front(1);
+    xs.drop(1);
     println!("{:?}", xs);
 }
 
@@ -105,8 +112,8 @@ where
         while p.is_some() {
             match p {
                 Some(ref node) => {
-                    println!("{:?}", node.lock().unwrap().data);
-                    p = p.unwrap().lock().unwrap().next.clone();
+                    println!("{:?}", node.borrow().data);
+                    p = p.unwrap().borrow().next.clone();
                 }
                 None => {}
             }
